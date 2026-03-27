@@ -73,21 +73,15 @@ def _save_comparison(original: Image.Image, result: Image.Image, prompt: str) ->
 # ---------------------------------------------------------------------------
 
 def build_prompt(user_input: str) -> tuple[str, str]:
-    """
-    Wrap the user's clothing description in a photorealism template.
-
-    Returns:
-        (prompt, negative_prompt)
-    """
     prompt = (
-        f"a person wearing {user_input}, "
-        "photorealistic, studio lighting, high quality, "
-        "sharp focus, natural fabric texture, 8k"
+        f"the same person wearing {user_input}, "
+        "same face, same background, same pose, "
+        "photorealistic, high quality, sharp focus, natural fabric texture"
     )
     negative_prompt = (
-        "cartoon, anime, illustration, blurry, low quality, "
-        "deformed, extra limbs, bad anatomy, watermark, text, "
-        "duplicate, missing limbs, distorted face"
+        "different person, different face, cartoon, anime, blurry, "
+        "low quality, deformed, extra limbs, bad anatomy, watermark, "
+        "text, duplicate, missing limbs, distorted face, changed background"
     )
     return prompt, negative_prompt
 
@@ -135,18 +129,20 @@ def run_inpainting(
     }
 
     payload = {
-        "version": REPLICATE_MODEL.split(":")[1],
-        "input": {
-            "prompt":              prompt,
-            "negative_prompt":     negative_prompt,
-            "image":               image_b64,
-            "mask":                mask_b64,
-            "num_inference_steps": num_inference_steps,
-            "guidance_scale":      guidance_scale,
-            "width":               512,
-            "height":              512,
-        }
+    "version": REPLICATE_MODEL.split(":")[1],
+    "input": {
+        "prompt":              prompt,
+        "negative_prompt":     negative_prompt,
+        "image":               image_b64,
+        "mask":                mask_b64,
+        "num_inference_steps": num_inference_steps,
+        "guidance_scale":      guidance_scale,
+        "width":               512,
+        "height":              512,
+        "strength":            0.85,   # ADD THIS — lower = more faithful to original
+        "num_outputs":         1,
     }
+}
 
     print("[pipeline] Sending request to Replicate API...")
     response = requests.post(

@@ -5,7 +5,7 @@ Takes the image and mask from Phase 2 and generates a new image
 with the clothing replaced using Stable Diffusion inpainting.
 
 Usage:
-    python pipeline.py samples/input.jpg "black oversized hoodie"
+    python pipeline.py samples/input.jpg "blue oversized hoodie"
 """
 
 import os
@@ -73,15 +73,25 @@ def _save_comparison(original: Image.Image, result: Image.Image, prompt: str) ->
 # ---------------------------------------------------------------------------
 
 def build_prompt(user_input: str) -> tuple[str, str]:
+    """
+    Wrap the user's clothing description in a photorealism template.
+    Keeps face, pose, background unchanged — only swaps the clothing.
+
+    Returns:
+        (prompt, negative_prompt)
+    """
     prompt = (
         f"the same person wearing {user_input}, "
-        "same face, same background, same pose, "
-        "photorealistic, high quality, sharp focus, natural fabric texture"
+        "same face, same background, same pose, same body position, "
+        "same hands position, photorealistic, high quality, "
+        "sharp focus, natural fabric texture"
     )
     negative_prompt = (
-        "different person, different face, cartoon, anime, blurry, "
-        "low quality, deformed, extra limbs, bad anatomy, watermark, "
-        "text, duplicate, missing limbs, distorted face, changed background"
+        "different person, different face, different pose, "
+        "crossed arms, folded arms, changed body position, "
+        "changed hands, cartoon, anime, blurry, low quality, "
+        "deformed, extra limbs, bad anatomy, watermark, text, "
+        "distorted face, changed background"
     )
     return prompt, negative_prompt
 
@@ -96,7 +106,8 @@ def run_inpainting(
     prompt: str,
     negative_prompt: str,
     num_inference_steps: int = 50,
-    guidance_scale: float = 7.5,
+    guidance_scale: float = 9.0,
+    strength: float = 0.60,
 ) -> Image.Image:
     """
     Call the Replicate inpainting API and return the generated image.
@@ -107,7 +118,8 @@ def run_inpainting(
         prompt:              What to generate in the masked area
         negative_prompt:     What to avoid generating
         num_inference_steps: More steps = better quality, slower (default 50)
-        guidance_scale:      How strongly to follow the prompt (default 7.5)
+        guidance_scale:      How strongly to follow the prompt (default 9.0)
+        strength:            0.0 = keep original, 1.0 = fully regenerate (default 0.60)
 
     Returns:
         Generated PIL image
@@ -129,20 +141,20 @@ def run_inpainting(
     }
 
     payload = {
-    "version": REPLICATE_MODEL.split(":")[1],
-    "input": {
-        "prompt":              prompt,
-        "negative_prompt":     negative_prompt,
-        "image":               image_b64,
-        "mask":                mask_b64,
-        "num_inference_steps": num_inference_steps,
-        "guidance_scale":      guidance_scale,
-        "width":               512,
-        "height":              512,
-        "strength":            0.85,   # ADD THIS — lower = more faithful to original
-        "num_outputs":         1,
+        "version": REPLICATE_MODEL.split(":")[1],
+        "input": {
+            "prompt":              prompt,
+            "negative_prompt":     negative_prompt,
+            "image":               image_b64,
+            "mask":                mask_b64,
+            "num_inference_steps": num_inference_steps,
+            "guidance_scale":      guidance_scale,
+            "strength":            strength,
+            "width":               512,
+            "height":              512,
+            "num_outputs":         1,
+        }
     }
-}
 
     print("[pipeline] Sending request to Replicate API...")
     response = requests.post(
@@ -197,7 +209,7 @@ def run_pipeline(image_path: str, clothing_prompt: str) -> tuple[Image.Image, Im
 
     Args:
         image_path:      Path to person photo
-        clothing_prompt: e.g. "black oversized hoodie"
+        clothing_prompt: e.g. "blue oversized hoodie"
 
     Returns:
         (original_image, result_image) — both PIL images
@@ -241,7 +253,7 @@ def run_pipeline(image_path: str, clothing_prompt: str) -> tuple[Image.Image, Im
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("\nUsage:   python pipeline.py <image_path> \"<clothing prompt>\"")
-        print("Example: python pipeline.py samples/input.jpg \"black oversized hoodie\"")
+        print("Example: python pipeline.py samples/input.jpg \"blue oversized hoodie\"")
         print("Example: python pipeline.py samples/input.jpg \"red floral summer dress\"")
         sys.exit(1)
 

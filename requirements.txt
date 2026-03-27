@@ -1,1 +1,9 @@
-new
+transformers
+torch
+torchvision
+pillow
+numpy
+requests
+python-dotenv
+gradio
+replicate

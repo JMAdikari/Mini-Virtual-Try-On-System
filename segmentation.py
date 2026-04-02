@@ -1,14 +1,8 @@
 """
-Phase 2 — Clothing Mask Generation (Production Level)
-=======================================================
-Strategy:
-  1. Remove background with rembg (eliminates color confusion)
-  2. Run SegFormer on the clean person-only image
-  3. Extract clothing mask based on detected category
-  4. Combine with person silhouette mask for best coverage
-  5. Dilate + smooth edges for clean inpainting blend
-
-Supports upper body, lower body, and full body clothing.
+Phase 2 — Clothing Mask Generation (Smart Item Detection)
+===========================================================
+Detects exactly which clothing item is in the prompt and
+masks only that specific region — nothing else.
 
 Model label reference (mattmdjaga/segformer_b2_clothes):
   Background, Hat, Hair, Sunglasses, Upper-clothes, Skirt,
@@ -17,8 +11,8 @@ Model label reference (mattmdjaga/segformer_b2_clothes):
 
 Usage:
     python segmentation.py samples/input.jpg
+    python segmentation.py samples/input.jpg 15 upper
     python segmentation.py samples/input.jpg 15 lower
-    python segmentation.py samples/input.jpg 15 full
 """
 
 import os
@@ -36,42 +30,31 @@ warnings.filterwarnings("ignore")
 
 MODEL_ID = "mattmdjaga/segformer_b2_clothes"
 
-# Exact labels returned by mattmdjaga/segformer_b2_clothes (lowercased)
-# Upper body — shirt/jacket/coat all fall under "upper-clothes"
-UPPER_BODY_LABELS = [
-    "upper-clothes",
-    "scarf",
-]
-
-# Lower body — pants + leg segments for full coverage
-LOWER_BODY_LABELS = [
-    "pants",
-    "skirt",
-    "left-leg",
-    "right-leg",
-    "belt",
-]
-
-# Full body — everything clothing-related
-FULL_BODY_LABELS = [
-    "upper-clothes",
-    "pants",
-    "skirt",
-    "dress",
-    "left-leg",
-    "right-leg",
-    "left-arm",
-    "right-arm",
-    "belt",
-    "scarf",
-]
+# Mapping of detected clothing type → exact model labels to mask
+# Only the relevant region gets masked — nothing else
+CATEGORY_LABEL_MAP = {
+    "upper":  ["upper-clothes"],
+    "lower":  ["pants", "skirt", "left-leg", "right-leg"],
+    "full":   ["upper-clothes", "pants", "skirt", "dress", "left-leg", "right-leg", "left-arm", "right-arm"],
+    "dress":  ["dress", "upper-clothes", "left-leg", "right-leg"],
+    "jacket": ["upper-clothes"],
+    "shirt":  ["upper-clothes"],
+    "hoodie": ["upper-clothes"],
+    "coat":   ["upper-clothes"],
+    "pants":  ["pants", "left-leg", "right-leg"],
+    "jeans":  ["pants", "left-leg", "right-leg"],
+    "skirt":  ["skirt", "left-leg", "right-leg"],
+    "shorts": ["pants", "left-leg", "right-leg"],
+    "scarf":  ["scarf"],
+    "hat":    ["hat"],
+}
 
 TARGET_SIZE   = (512, 512)
 MASK_DILATION = 15
 
 
 # ---------------------------------------------------------------------------
-# Model loader (lazy)
+# Model loader
 # ---------------------------------------------------------------------------
 
 _seg_pipeline = None
@@ -97,14 +80,13 @@ def _load_model():
 
 
 # ---------------------------------------------------------------------------
-# Step 1 — Background removal
+# Background removal
 # ---------------------------------------------------------------------------
 
 def remove_background(image: Image.Image) -> tuple:
-    """Remove background using rembg. Returns (image_no_bg, person_mask)."""
     try:
         from rembg import remove
-        print("[segmentation] Removing background with rembg...")
+        print("[segmentation] Removing background...")
         image_no_bg = remove(image)
         alpha = image_no_bg.split()[3]
         person_mask = alpha.point(lambda p: 255 if p > 127 else 0)
@@ -116,18 +98,16 @@ def remove_background(image: Image.Image) -> tuple:
 
 
 def image_no_bg_to_white(image_no_bg: Image.Image) -> Image.Image:
-    """Paste person onto white background for cleaner segmentation."""
     white_bg = Image.new("RGB", image_no_bg.size, (255, 255, 255))
     white_bg.paste(image_no_bg, mask=image_no_bg.split()[3])
     return white_bg
 
 
 # ---------------------------------------------------------------------------
-# Step 2 — Segmentation
+# Segmentation
 # ---------------------------------------------------------------------------
 
 def load_image(image_path: str) -> Image.Image:
-    """Load and resize image to 512x512 RGB."""
     if not os.path.exists(image_path):
         raise FileNotFoundError(f"Image not found: {image_path}")
     image = Image.open(image_path).convert("RGB")
@@ -136,36 +116,22 @@ def load_image(image_path: str) -> Image.Image:
 
 
 def run_segmentation(image: Image.Image) -> list:
-    """Run SegFormer on an image. Returns list of segment dicts."""
     model = _load_model()
     segments = model(image)
     print(f"[segmentation] Detected labels: {[s['label'] for s in segments]}")
     return segments
 
 
-def extract_clothing_mask(segments: list, category: str = "upper") -> Image.Image | None:
+def extract_mask_for_labels(segments: list, target_labels: list) -> Image.Image | None:
     """
-    Merge all clothing segment masks into one binary mask.
-
-    Args:
-        segments: Output from run_segmentation()
-        category: "upper", "lower", or "full"
-
-    Returns:
-        Combined binary mask or None
+    Build a binary mask from only the specified labels.
+    Everything else is left black (untouched).
     """
-    if category == "lower":
-        target_labels = LOWER_BODY_LABELS
-    elif category == "full":
-        target_labels = FULL_BODY_LABELS
-    else:
-        target_labels = UPPER_BODY_LABELS
-
     combined_mask = None
     matched = []
 
     for seg in segments:
-        if seg["label"].lower() in target_labels:
+        if seg["label"].lower() in [l.lower() for l in target_labels]:
             matched.append(seg["label"])
             seg_mask = seg["mask"].convert("L")
             seg_mask = seg_mask.point(lambda p: 255 if p > 0 else 0)
@@ -175,64 +141,45 @@ def extract_clothing_mask(segments: list, category: str = "upper") -> Image.Imag
                 combined_mask = ImageChops.lighter(combined_mask, seg_mask)
 
     if combined_mask is None:
-        print(f"[segmentation] WARNING: No [{category}] labels matched.")
-        print(f"[segmentation] Expected one of: {target_labels}")
+        print(f"[segmentation] WARNING: None of {target_labels} found in image.")
     else:
-        print(f"[segmentation] Matched labels: {matched}")
-        print(f"[segmentation] [{category}] mask coverage: {_mask_coverage(combined_mask):.1f}%")
+        print(f"[segmentation] Matched: {matched} — coverage: {_mask_coverage(combined_mask):.1f}%")
 
     return combined_mask
 
 
 # ---------------------------------------------------------------------------
-# Step 3 — Mask refinement
+# Mask refinement
 # ---------------------------------------------------------------------------
 
-def refine_mask_with_person_silhouette(
-    clothing_mask: Image.Image,
-    person_mask: Image.Image,
-) -> Image.Image:
-    """Intersect clothing mask with person silhouette to remove bg bleed."""
+def refine_with_silhouette(clothing_mask: Image.Image, person_mask: Image.Image) -> Image.Image:
     refined = ImageChops.darker(clothing_mask, person_mask)
     print(f"[segmentation] Refined: {_mask_coverage(clothing_mask):.1f}% → {_mask_coverage(refined):.1f}%")
     return refined
 
 
 def dilate_mask(mask: Image.Image, size: int = MASK_DILATION) -> Image.Image:
-    """Expand mask edges outward for smoother inpainting blend."""
     if size % 2 == 0:
         size += 1
     return mask.filter(ImageFilter.MaxFilter(size))
 
 
 def smooth_mask_edges(mask: Image.Image, blur_radius: int = 3) -> Image.Image:
-    """Feather mask edges then re-binarize."""
-    blurred  = mask.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-    smoothed = blurred.point(lambda p: 255 if p > 127 else 0)
-    return smoothed
+    blurred = mask.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+    return blurred.point(lambda p: 255 if p > 127 else 0)
 
 
-def fallback_torso_mask(image: Image.Image, category: str = "upper") -> Image.Image:
-    """
-    Manual rectangle fallback when segmentation fails.
-    Adjusts region based on category.
-    """
+def fallback_mask(image: Image.Image, category: str) -> Image.Image:
     w, h = image.size
     mask = Image.new("L", (w, h), 0)
     draw = ImageDraw.Draw(mask)
-
     if category == "lower":
-        x0, y0 = int(w * 0.15), int(h * 0.48)
-        x1, y1 = int(w * 0.85), int(h * 0.98)
+        draw.rectangle([int(w*0.12), int(h*0.48), int(w*0.88), int(h*0.98)], fill=255)
     elif category == "full":
-        x0, y0 = int(w * 0.12), int(h * 0.15)
-        x1, y1 = int(w * 0.88), int(h * 0.98)
-    else:  # upper
-        x0, y0 = int(w * 0.12), int(h * 0.15)
-        x1, y1 = int(w * 0.88), int(h * 0.72)
-
-    draw.rectangle([x0, y0, x1, y1], fill=255)
-    print(f"[segmentation] Fallback [{category}] mask: ({x0},{y0}) -> ({x1},{y1})")
+        draw.rectangle([int(w*0.10), int(h*0.12), int(w*0.90), int(h*0.98)], fill=255)
+    else:
+        draw.rectangle([int(w*0.10), int(h*0.12), int(w*0.90), int(h*0.72)], fill=255)
+    print(f"[segmentation] Using fallback [{category}] rectangle mask.")
     return mask
 
 
@@ -248,64 +195,63 @@ def get_clothing_mask(
     save_debug: bool = False,
 ) -> tuple:
     """
-    Full Phase 2 pipeline:
-      load → remove background → segment → extract mask →
-      refine with silhouette → dilate → smooth
+    Generate a mask for only the clothing region specified by category.
 
     Args:
-        image_path:   Path to person photo
-        dilation:     Mask edge expansion in pixels (default 15)
-        category:     "upper", "lower", or "full"
-        use_fallback: Use rectangle if everything fails
-        save_debug:   Save intermediate images for inspection
+        image_path: Path to person photo
+        dilation:   Edge expansion in pixels
+        category:   Clothing type key from CATEGORY_LABEL_MAP
+                    e.g. "upper", "lower", "jeans", "dress", "hoodie"
+        use_fallback: Use rectangle if segmentation fails
 
     Returns:
-        (image, mask) — both PIL images at 512x512
+        (image, mask) — both at 512x512
     """
-    print(f"[segmentation] Category: [{category}]")
+    # Resolve category to model labels
+    target_labels = CATEGORY_LABEL_MAP.get(category, CATEGORY_LABEL_MAP["upper"])
+    print(f"[segmentation] Item: [{category}] → masking labels: {target_labels}")
 
-    # Step 1 — Load
+    # Load
     image = load_image(image_path)
 
-    # Step 2 — Remove background
+    # Remove background
     image_no_bg, person_mask = remove_background(image)
     image_for_seg = image_no_bg_to_white(image_no_bg) if image_no_bg is not None else image
 
-    # Step 3 — Segment
+    # Segment
     segments = run_segmentation(image_for_seg)
 
-    # Step 4 — Extract mask for detected category
-    mask = extract_clothing_mask(segments, category=category)
+    # Extract mask for target labels only
+    mask = extract_mask_for_labels(segments, target_labels)
 
-    # Step 5 — Refine with person silhouette
+    # Refine with person silhouette
     if mask is not None and person_mask is not None:
-        person_mask_resized = person_mask.resize(TARGET_SIZE, Image.LANCZOS)
-        mask = refine_mask_with_person_silhouette(mask, person_mask_resized)
+        mask = refine_with_silhouette(mask, person_mask.resize(TARGET_SIZE, Image.LANCZOS))
 
-    # Step 6 — Fallback if mask too small or missing
+    # Fallback
     if mask is None or _mask_coverage(mask) < 2.0:
         if use_fallback:
-            print(f"[segmentation] Mask too small — using [{category}] fallback rectangle.")
-            mask = fallback_torso_mask(image, category=category)
+            # Determine broad category for fallback shape
+            broad = "lower" if category in ("lower", "pants", "jeans", "skirt", "shorts") else \
+                    "full"  if category in ("full", "dress") else "upper"
+            mask = fallback_mask(image, broad)
             if person_mask is not None:
-                person_mask_resized = person_mask.resize(TARGET_SIZE, Image.LANCZOS)
-                mask = refine_mask_with_person_silhouette(mask, person_mask_resized)
+                mask = refine_with_silhouette(mask, person_mask.resize(TARGET_SIZE, Image.LANCZOS))
         else:
-            raise ValueError("Could not generate a valid clothing mask.")
+            raise ValueError(f"Could not generate mask for [{category}].")
 
-    # Step 7 — Dilate and smooth
+    # Dilate and smooth
     mask = dilate_mask(mask, size=dilation)
     mask = smooth_mask_edges(mask)
 
     print(f"[segmentation] Final mask coverage: {_mask_coverage(mask):.1f}%")
 
-    # Debug
     if save_debug:
         image.save("debug_image.png")
         mask.save("debug_mask.png")
         if image_no_bg is not None:
             image_no_bg_to_white(image_no_bg).save("debug_nobg.png")
-        print("[segmentation] Saved: debug_image.png, debug_mask.png, debug_nobg.png")
+        print("[segmentation] Saved debug images.")
 
     return image, mask
 
@@ -320,7 +266,6 @@ def _mask_coverage(mask: Image.Image) -> float:
 
 
 def visualize_mask_overlay(image: Image.Image, mask: Image.Image, alpha: float = 0.5) -> Image.Image:
-    """Overlay mask as red tint on image for visual debugging."""
     overlay   = image.copy().convert("RGBA")
     red_layer = Image.new("RGBA", image.size, (220, 50, 50, int(255 * alpha)))
     overlay.paste(red_layer, mask=mask)
@@ -334,8 +279,8 @@ def visualize_mask_overlay(image: Image.Image, mask: Image.Image, alpha: float =
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage:   python segmentation.py <image> [dilation] [category]")
-        print("Example: python segmentation.py samples/input.jpg 15 lower")
-        print("Categories: upper | lower | full")
+        print("Example: python segmentation.py samples/input.jpg 15 jeans")
+        print(f"Categories: {list(CATEGORY_LABEL_MAP.keys())}")
         sys.exit(1)
 
     image_path = sys.argv[1]
@@ -348,17 +293,12 @@ if __name__ == "__main__":
     print(f"Category : {category}\n")
 
     image, mask = get_clothing_mask(
-        image_path,
-        dilation=dilation,
-        category=category,
-        save_debug=True,
+        image_path, dilation=dilation, category=category, save_debug=True,
     )
 
     mask.save("output_mask.png")
-    overlay = visualize_mask_overlay(image, mask)
-    overlay.save("output_overlay.png")
+    visualize_mask_overlay(image, mask).save("output_overlay.png")
 
-    print(f"\n--- Done --- (final coverage: {_mask_coverage(mask):.1f}%)")
+    print(f"\n--- Done --- coverage: {_mask_coverage(mask):.1f}%")
     print("output_mask.png    -> binary mask")
     print("output_overlay.png -> red overlay")
-    print("debug_nobg.png     -> background removed version")

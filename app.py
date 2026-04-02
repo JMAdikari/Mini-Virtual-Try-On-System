@@ -2,7 +2,7 @@
 Phase 4 — Gradio UI
 ====================
 3-column photo layout: Input | Before | After all in same row.
-Controls sit below the photos.
+Controls sit below the photos. Generate button aligned with input.
 
 Usage:
     python app.py
@@ -44,22 +44,40 @@ footer, .built-with { display: none !important; }
 
 /* ── Page header ── */
 #page-header {
-    padding: 28px 0 20px;
+    padding: 20px 0 18px;
     border-bottom: 1px solid #e8e3de;
     margin-bottom: 28px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    justify-content: space-between;
+}
+#page-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 14px;
 }
 #page-title {
-    font-size: 1.6rem;
-    font-weight: 600;
+    font-size: 1.8rem;
+    font-weight: 700;
     color: #1c1c1c;
     letter-spacing: -0.3px;
     margin-bottom: 4px;
 }
 #page-subtitle {
-    font-size: 0.84rem;
-    color: #aaa;
-    font-weight: 300;
-    line-height: 1.5;
+    font-size: 0.9rem;
+    color: #8f8a84;
+    font-weight: 400;
+    line-height: 1.4;
+}
+#page-meta {
+    font-size: 0.78rem;
+    color: #bdb6ae;
+    white-space: nowrap;
+}
+@media (max-width: 800px) {
+    #page-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+    #page-meta { display: none; }
 }
 
 /* ── Photo column labels ── */
@@ -106,14 +124,7 @@ footer, .built-with { display: none !important; }
     margin: 24px 0 20px;
 }
 
-/* ── Controls row ── */
-#controls-row {
-    display: flex;
-    gap: 16px;
-    align-items: flex-end;
-}
-
-/* ── Textbox ── */
+/* ── Textbox — fixed height to match button ── */
 textarea {
     background: #fff !important;
     border: 1.5px solid #e4dfd9 !important;
@@ -123,7 +134,12 @@ textarea {
     color: #1c1c1c !important;
     padding: 12px 14px !important;
     resize: none !important;
+    height: 46px !important;
+    min-height: 46px !important;
+    max-height: 46px !important;
+    line-height: 1.2 !important;
     transition: border-color 0.18s, box-shadow 0.18s !important;
+    overflow: hidden !important;
 }
 textarea:focus {
     border-color: #c0541c !important;
@@ -141,7 +157,7 @@ label > span {
     color: #b0a8a0 !important;
 }
 
-/* ── Generate button ── */
+/* ── Generate button — same height as textarea ── */
 button.primary {
     background: #c0541c !important;
     border: none !important;
@@ -153,15 +169,33 @@ button.primary {
     text-transform: uppercase !important;
     color: #fff !important;
     height: 46px !important;
-    min-width: 140px !important;
+    min-height: 46px !important;
+    width: 100% !important;
     transition: background 0.15s, transform 0.1s !important;
     white-space: nowrap !important;
+    margin-top: 0 !important;
 }
 button.primary:hover {
     background: #a84618 !important;
     transform: translateY(-1px) !important;
 }
 button.primary:active { transform: translateY(0) !important; }
+
+/* ── Align prompt row bottom so button sits level with input ── */
+#prompt-row {
+    display: flex !important;
+    align-items: flex-end !important;
+    gap: 12px !important;
+}
+#prompt-row > div {
+    margin-bottom: 0 !important;
+}
+
+/* Force the row containing button+input to bottom-align */
+.gradio-container .gap > .form,
+.gradio-container .gap > .block {
+    margin-bottom: 0 !important;
+}
 
 /* ── Hint chips ── */
 #hint-bar {
@@ -241,10 +275,15 @@ with gr.Blocks(css=css, title="Mini Virtual Try-On") as demo:
     # Header
     gr.HTML("""
     <div id="page-header">
-        <div id="page-title">Mini Virtual Try-On System</div>
-        <div id="page-subtitle">
-            Upload a photo · Describe the clothing · See the result — face, pose and background stay the same.
+        <div id="page-title-wrap">
+            <div>
+                <div id="page-title">Mini Virtual Try-On</div>
+                <div id="page-subtitle">
+                    Upload a photo · Describe the clothing · See the result — face, pose and background remain unchanged.
+                </div>
+            </div>
         </div>
+        <div id="page-meta">Demo · v0.1</div>
     </div>
     """)
 
@@ -281,14 +320,16 @@ with gr.Blocks(css=css, title="Mini Virtual Try-On") as demo:
     # ── Controls below photos ────────────────────────────────────
     gr.HTML('<hr id="controls-divider">')
 
-    with gr.Row():
+    # Prompt + button in same row, bottom-aligned
+    with gr.Row(elem_id="prompt-row", equal_height=True):
         with gr.Column(scale=5):
             prompt_input = gr.Textbox(
                 label="Clothing description",
                 placeholder="e.g. black oversized hoodie",
                 lines=1,
+                max_lines=1,
             )
-        with gr.Column(scale=1, min_width=140):
+        with gr.Column(scale=1, min_width=160):
             generate_btn = gr.Button("Generate →", variant="primary")
 
     gr.HTML("""
@@ -297,7 +338,7 @@ with gr.Blocks(css=css, title="Mini Virtual Try-On") as demo:
         <span class="hint-chip"><b>Lower</b> — jeans, pants, skirts</span>
         <span class="hint-chip"><b>Full</b> — dresses, jumpsuits</span>
     </div>
-    <div id="status-note">Category is auto-detected from your prompt &nbsp;·&nbsp; Generation takes ~30–60 sec</div>
+    <div id="status-note">Item auto-detected from prompt &nbsp;·&nbsp; Generation takes ~30–60 sec</div>
     """)
 
     # ── Example prompts ──────────────────────────────────────────
@@ -308,16 +349,16 @@ with gr.Blocks(css=css, title="Mini Virtual Try-On") as demo:
     """)
 
     with gr.Row():
-        b1 = gr.Button("👕  Black oversized hoodie",  elem_classes="pbtn")
-        b2 = gr.Button("👗  Red floral summer dress",  elem_classes="pbtn")
-        b3 = gr.Button("👔  White linen button-up",    elem_classes="pbtn")
-        b4 = gr.Button("🧥  Navy blue blazer",         elem_classes="pbtn")
+        b1 = gr.Button("Black oversized hoodie",  elem_classes="pbtn")
+        b2 = gr.Button("Red floral summer dress",  elem_classes="pbtn")
+        b3 = gr.Button("White linen button-up",    elem_classes="pbtn")
+        b4 = gr.Button("Navy blue blazer",         elem_classes="pbtn")
 
     with gr.Row():
-        b5 = gr.Button("👖  Black skinny jeans",       elem_classes="pbtn")
-        b6 = gr.Button("🧤  Brown leather jacket",     elem_classes="pbtn")
-        b7 = gr.Button("🩱  Grey turtleneck sweater",  elem_classes="pbtn")
-        b8 = gr.Button("🧣  Olive cargo jacket",       elem_classes="pbtn")
+        b5 = gr.Button("Black skinny jeans",       elem_classes="pbtn")
+        b6 = gr.Button("Brown leather jacket",     elem_classes="pbtn")
+        b7 = gr.Button("Grey turtleneck sweater",  elem_classes="pbtn")
+        b8 = gr.Button("Olive cargo jacket",       elem_classes="pbtn")
 
     b1.click(lambda: "black oversized hoodie",    outputs=prompt_input)
     b2.click(lambda: "red floral summer dress",   outputs=prompt_input)
